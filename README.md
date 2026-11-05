@@ -86,7 +86,8 @@ curl http://localhost:8080/v1/systemone -H "Content-Type: application/json" -d '
 - Answers come in the order of the questions, and a choice's probabilities in the order of its criteria.
 - `noul` is the probability of yes. `choice` returns the most likely name, its confidence and every probability.
   `score` is the expected level (the probability-weighted average of the levels, so it can fall between them).
-- The response has exactly the contract's fields. The time the model took is in the `x-typestrict-latency-ms` header.
+- The response has exactly the contract's fields. The time from dispatching the questions to the last answer (waiting
+  for a free session included) is in the `x-typestrict-latency-ms` header.
 - Invalid requests get `422` with `{"detail": [{"loc", "msg", "type"}]}`, as the contract's `HTTPValidationError`;
   a question whose options do not fit in the model's context is one of them.
 
@@ -108,6 +109,33 @@ read a 4,096-token input (a 150M-parameter model), and ONNX Runtime keeps that m
 the runtime reads the container's memory limit (cgroup v2 `memory.max`, or v1 `memory.limit_in_bytes`) and starts at
 most one session per 2.5 GB of it: a 2 GB Cloud Run or Kubernetes container gets one session. The startup log says how
 many sessions it chose and why. Set `TYPESTRICT_WORKERS` explicitly if your inputs are short.
+
+## Multi-question requests
+
+Each question of a request waits for the next free session on its own and runs there: an idle server answers a
+request's questions in parallel, a busy one queues them in arrival order, and no session idles while a question waits.
+Answers are identical to asking each question alone.
+
+How that was chosen: TS-PRGuard's five trained questions over one pull request (description and diff), 4 sessions of
+1 thread, Apple M5 with other work running (load average 5 to 9), `examples/strategies.rs`:
+
+| Strategy | State | One request alone, p50 / p95 | Concurrency 4: questions/s, request p50 | Concurrency 16: questions/s | Peak RSS |
+| --- | --- | --- | --- | --- | --- |
+| A: one after another on one session | ~310 tokens | 1,305 / 1,516 ms | 8.75, 2,245 ms | 8.75 | 1.2 GB |
+| B: request takes the free sessions, splits its questions | ~310 tokens | 685 / 718 ms | 7.20, 686 ms | 7.18 | 1.4 GB |
+| C: one batched ONNX run on one session | ~310 tokens | 900 / 1,056 ms | 8.86, 2,249 ms | 8.75 | 2.8 GB |
+| D: B, batching on each session it got | ~310 tokens | 601 / 624 ms | 8.36, 595 ms | 8.56 | 1.5 GB |
+| **Q: each question to the next free session (chosen)** | ~310 tokens | 672 / 717 ms | **9.02**, 2,186 ms | **8.90** | 1.4 GB |
+| A | 4,096 tokens | 15.7 / 16.3 s | 0.48, 40.8 s | 0.47 | 7.6 GB |
+| B | 4,096 tokens | 11.1 / 11.5 s | 0.45, 11.2 s | 0.45 | 8.6 GB |
+| C | 4,096 tokens | 16.9 / 19.7 s | 0.11, 41.8 s | 0.11 | 15.1 GB (46.5 GB peak footprint, swapping) |
+| D | 4,096 tokens | 11.6 / 11.8 s | 0.44, 11.3 s | 0.44 | 12.2 GB |
+| **Q (chosen)** | 4,096 tokens | **11.0 / 11.5 s** | **0.51**, 37.9 s | **0.52** | 8.0 GB |
+
+Q halves the latency of a request on an idle server, keeps the best throughput under load, and needs no more memory per
+session than running questions one by one, so the default worker count (one per 2.5 GB) still holds. Batching (C) is
+exact (the pad and option masks keep padding out of every answer: identical probabilities) but on CPU it buys no
+throughput and multiplies the working memory by the batch size; at 4,096 tokens five questions in one run took 46 GB.
 
 ## AWS Lambda
 

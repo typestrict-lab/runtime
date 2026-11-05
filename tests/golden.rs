@@ -112,3 +112,29 @@ fn the_reader_matches_the_playground() {
     eprintln!("{checked} answers within {TOLERANCE:e} of the playground's (worst {worst:.2e})");
     assert!(checked >= 10);
 }
+
+/// Questions batched in one ONNX run answer as they do alone: the pad and option masks keep the padding of the shorter
+/// rows (tokens and options) out of every row.
+#[test]
+fn a_batch_answers_as_its_questions_alone() {
+    let Some(model) = common::model_dir("a_batch_answers_as_its_questions_alone") else { return };
+    let g = golden();
+    let enc = Arc::new(Encoder::load(&model).unwrap());
+    let mut m = Model::load(&model, enc.clone(), 1).unwrap();
+    let batch: Vec<_> = g["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["manifest_patch"].is_null() && !c["probabilities"].is_null())
+        .map(|c| enc.encode(&question(&c["question"])).unwrap())
+        .collect();
+    assert!(batch.len() >= 8, "rows of different lengths and option counts");
+    let together = m.run_batch(&batch).unwrap();
+    for (e, d) in batch.iter().zip(&together) {
+        let alone = m.run(e).unwrap();
+        let dp = alone.probabilities.iter().zip(&d.probabilities).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
+        assert!(dp < 1e-5, "{dp:e}");
+        let dc = (alone.confidence.unwrap_or(0.0) - d.confidence.unwrap_or(0.0)).abs();
+        assert!(dc < 1e-5, "confidence {dc:e}");
+    }
+}

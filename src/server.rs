@@ -1,9 +1,11 @@
 //! The HTTP surface: `POST /v1/systemone`, `GET /v1/models`, `GET /healthz`.
 //!
 //! - **A pool of 1-thread sessions**, not one N-thread session: on CPU a 1-thread session costs only ~1.5x the time of a
-//!   4-thread one, so N 1-thread workers answer ~2.5x more questions per CPU (measured in the typestrict lab).
+//!   4-thread one, so N 1-thread workers answer ~2.5x more questions per CPU (measured in the typestrict lab). Each
+//!   question of a request takes the next free session on its own.
 //! - **The order is the client's**: questions are answered in the order sent, options read in the order sent.
-//! - **Nothing added to the body**: the inference time goes in the `x-typestrict-latency-ms` header.
+//! - **Nothing added to the body**: the time from dispatch to the last answer goes in the
+//!   `x-typestrict-latency-ms` header.
 //! - **`TYPESTRICT_TOKEN`**: when set, every request but `/healthz` needs `Authorization: Bearer <token>`, compared in
 //!   constant time.
 //!
@@ -24,7 +26,7 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::contract::{self, ModelMetadata, Ordered, Request, Usage, ValidationError};
-use crate::reader::{Encoder, Model, Unanswerable, timed};
+use crate::reader::{Encoder, Model, Unanswerable};
 
 /// Requests larger than this are refused with 413. The model reads at most `max_length` tokens of a state, so this only
 /// bounds the JSON a client may send.
@@ -167,22 +169,37 @@ async fn systemone(State(app): State<Arc<App>>, body: Bytes) -> Response {
         return detail(StatusCode::SERVICE_UNAVAILABLE, "the model is still loading");
     }
 
-    // One session for the whole request, its questions one after another (batch 1, as the playground runs them).
-    let mut model = app.free.lock().await.recv().await.expect("the session pool is never closed");
-    let run = tokio::task::spawn_blocking(move || {
-        let (decisions, ms) = timed(|| encoded.iter().map(|e| model.run(e)).collect::<anyhow::Result<Vec<_>>>());
-        (model, decisions, ms)
-    })
-    .await;
-    let (model, decisions, ms) = match run {
-        Ok(x) => x,
-        Err(e) => return detail(StatusCode::INTERNAL_SERVER_ERROR, format!("inference panicked: {e}")),
-    };
-    app.add_model(model);
-    let decisions = match decisions {
-        Ok(d) => d,
-        Err(e) => return detail(StatusCode::INTERNAL_SERVER_ERROR, format!("inference failed: {e:#}")),
-    };
+    // Each question waits for the next free session on its own and runs there (batch 1, as the playground runs
+    // them): an idle server answers the questions of a request in parallel, a busy one queues them fairly (tokio's
+    // Mutex is FIFO), and no session idles while a question waits. Measured against running them one after another
+    // on one session and against batching them in one ONNX run: see "Multi-question requests" in README.md.
+    let t0 = std::time::Instant::now();
+    let tasks: Vec<_> = encoded
+        .into_iter()
+        .map(|e| {
+            let app = app.clone();
+            tokio::spawn(async move {
+                let mut model = app.free.lock().await.recv().await.expect("the session pool is never closed");
+                let (model, d) = tokio::task::spawn_blocking(move || {
+                    let d = model.run(&e);
+                    (model, d)
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("inference panicked: {e}"))?;
+                app.add_model(model);
+                d
+            })
+        })
+        .collect();
+    let mut decisions = Vec::with_capacity(tasks.len());
+    for t in tasks {
+        match t.await {
+            Ok(Ok(d)) => decisions.push(d),
+            Ok(Err(e)) => return detail(StatusCode::INTERNAL_SERVER_ERROR, format!("inference failed: {e:#}")),
+            Err(e) => return detail(StatusCode::INTERNAL_SERVER_ERROR, format!("inference panicked: {e}")),
+        }
+    }
+    let ms = t0.elapsed().as_secs_f64() * 1000.0;
 
     let tokens = decisions.iter().map(|d| d.tokens as u64).sum();
     let answers = prepared.iter().zip(&decisions).map(|(p, d)| (p.name.clone(), contract::to_answer(p, d))).collect();

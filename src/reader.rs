@@ -243,41 +243,62 @@ impl Model {
 
     /// Runs an encoded question.
     pub fn run(&mut self, e: &Encoded) -> Result<Decision> {
+        Ok(self.run_batch(std::slice::from_ref(e))?.remove(0))
+    }
+
+    /// Runs encoded questions in one ONNX call: each row padded to the longest row, each option list padded to the
+    /// longest with masked options. The pad and option masks keep padding out of every row's answer.
+    pub fn run_batch(&mut self, batch: &[Encoded]) -> Result<Vec<Decision>> {
         let m = &self.enc.manifest;
-        let t = e.padded_length;
-        let mut ids = vec![i64::from(self.enc.ids.pad); t];
-        let mut pad_mask = vec![false; t];
-        for (j, &id) in e.ids.iter().enumerate() {
-            ids[j] = i64::from(id);
-            pad_mask[j] = true;
+        let b = batch.len();
+        anyhow::ensure!(b > 0, "an empty batch");
+        let t = batch.iter().map(|e| e.padded_length).max().unwrap_or(0);
+        let n = batch.iter().map(|e| e.option_positions.len()).max().unwrap_or(0);
+        let mut ids = vec![i64::from(self.enc.ids.pad); b * t];
+        let mut pad_mask = vec![false; b * t];
+        let mut positions = vec![0i64; b * n];
+        let mut option_mask = vec![false; b * n];
+        for (r, e) in batch.iter().enumerate() {
+            for (j, &id) in e.ids.iter().enumerate() {
+                ids[r * t + j] = i64::from(id);
+                pad_mask[r * t + j] = true;
+            }
+            for (j, &p) in e.option_positions.iter().enumerate() {
+                positions[r * n + j] = p as i64;
+                option_mask[r * n + j] = true;
+            }
         }
-        let n = e.option_positions.len();
-        let positions: Vec<i64> = e.option_positions.iter().map(|&p| p as i64).collect();
+        let types: Vec<i64> = batch.iter().map(|e| e.question_type).collect();
         let (logits_name, conf_name) = (m.logits_output(), m.confidence_output());
         let out = self.session.run(ort::inputs![
-            m.input("ids") => Tensor::from_array(([1, t], ids))?,
-            m.input("pad_mask") => Tensor::from_array(([1, t], pad_mask))?,
-            m.input("option_positions") => Tensor::from_array(([1, n], positions))?,
-            m.input("option_mask") => Tensor::from_array(([1, n], vec![true; n]))?,
-            m.input("question_type") => Tensor::from_array(([1], vec![e.question_type]))?,
+            m.input("ids") => Tensor::from_array(([b, t], ids))?,
+            m.input("pad_mask") => Tensor::from_array(([b, t], pad_mask))?,
+            m.input("option_positions") => Tensor::from_array(([b, n], positions))?,
+            m.input("option_mask") => Tensor::from_array(([b, n], option_mask))?,
+            m.input("question_type") => Tensor::from_array(([b], types))?,
         ])?;
-        let logits: Vec<f32> = out
+        let all = out
             .get(&logits_name)
             .ok_or_else(|| anyhow!("the model has no output {logits_name}"))?
             .try_extract_tensor::<f32>()?
-            .1
-            .iter()
-            .take(n)
-            .copied()
-            .collect();
-        anyhow::ensure!(logits.len() == n, "the model returned {} logits for {n} options", logits.len());
-        let conf = match out.get(&conf_name) {
-            Some(v) => v.try_extract_tensor::<f32>()?.1.first().map(|&z| platt(f64::from(z), m)),
+            .1;
+        anyhow::ensure!(all.len() == b * n, "the model returned {} logits for {b} x {n} options", all.len());
+        let conf: Option<Vec<f32>> = match out.get(&conf_name) {
+            Some(v) => Some(v.try_extract_tensor::<f32>()?.1.to_vec()),
             None => None,
         };
-        let wide: Vec<f64> = logits.iter().map(|&l| f64::from(l)).collect();
-        let probabilities = softmax(&calibrate(&wide, e.question_type, m));
-        Ok(Decision { best: argmax(&probabilities), probabilities, confidence: conf, tokens: e.ids.len(), logits })
+        Ok(batch
+            .iter()
+            .enumerate()
+            .map(|(r, e)| {
+                let k = e.option_positions.len();
+                let logits = all[r * n..r * n + k].to_vec();
+                let wide: Vec<f64> = logits.iter().map(|&l| f64::from(l)).collect();
+                let probabilities = softmax(&calibrate(&wide, e.question_type, m));
+                let confidence = conf.as_ref().and_then(|c| c.get(r)).map(|&z| platt(f64::from(z), m));
+                Decision { best: argmax(&probabilities), probabilities, confidence, tokens: e.ids.len(), logits }
+            })
+            .collect())
     }
 }
 

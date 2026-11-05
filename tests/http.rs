@@ -227,6 +227,70 @@ async fn invalid_requests_get_4xx_with_a_detail() {
 }
 
 #[tokio::test]
+async fn a_multi_question_request_answers_as_single_questions_do() {
+    let test = "a_multi_question_request_answers_as_single_questions_do";
+    let (Some(dir), Some(enc)) = (common::model_dir(test), encoder(test)) else { return };
+    // Three sessions, so the questions of one request really run in parallel.
+    let app = App::new(enc.clone(), meta(), None);
+    for _ in 0..3 {
+        app.add_model(Model::load(&dir, enc.clone(), 1).unwrap());
+    }
+    let state = serde_json::to_string(DIFF).unwrap();
+    // The model's five trained questions, plus a score: different lengths, option counts and types in one request.
+    let tasks: Value = serde_json::from_str(
+        &std::fs::read_to_string(common::model_dir("").unwrap().join("decision_ai.json")).unwrap(),
+    )
+    .unwrap();
+    let mut questions: Vec<(String, String)> = tasks["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| {
+            let q = if t["kind"] == "noul" {
+                json!({"type": "noul", "instructions": t["question"]}).to_string()
+            } else {
+                let criteria = t["options"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, o)| format!("\"o{i}\": {o}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(r#"{{"type": "choice", "instructions": {}, "criteria": {{{criteria}}}}}"#, t["question"])
+            };
+            (t["name"].as_str().unwrap().to_string(), q)
+        })
+        .collect();
+    questions.push(("risk".into(), r#"{"type": "score", "criteria": ["none", "some", "high"]}"#.into()));
+    let body = |qs: &[(String, String)]| {
+        let qs = qs.iter().map(|(k, q)| format!("\"{k}\": {q}")).collect::<Vec<_>>().join(", ");
+        format!(r#"{{"model": "{NAME}", "state": {state}, "questions": {{{qs}}}}}"#)
+    };
+    let all = ask(&app, &body(&questions)).await;
+    assert_eq!(all.status, StatusCode::OK, "{}", all.text);
+    let all = all.json();
+    let mut tokens = 0;
+    for q in &questions {
+        let one = ask(&app, &body(std::slice::from_ref(q))).await.json();
+        tokens += one["usage"]["input_tokens"].as_u64().unwrap();
+        let (a, b) = (&all["answers"][&q.0], &one["answers"][&q.0]);
+        assert_eq!(a["type"], b["type"], "{}", q.0);
+        let probs = |x: &Value| -> Vec<f64> {
+            match x.get("probabilities") {
+                Some(p) => p.as_object().unwrap().values().map(|v| v.as_f64().unwrap()).collect(),
+                None => vec![x["noul"].as_f64().unwrap()],
+            }
+        };
+        for (x, y) in probs(a).iter().zip(probs(b)) {
+            assert!((x - y).abs() < 1e-5, "{}: {x} in the request against {y} alone", q.0);
+        }
+        assert_eq!(a.get("choice"), b.get("choice"), "{}", q.0);
+    }
+    assert_eq!(all["usage"]["input_tokens"].as_u64().unwrap(), tokens, "usage is the sum of the questions' tokens");
+}
+
+#[tokio::test]
 async fn any_model_name_is_answered_and_echoed() {
     let Some(app) = app("any_model_name_is_answered_and_echoed") else { return };
     for name in ["jev-latest", "", NAME] {
