@@ -196,10 +196,6 @@ async fn invalid_requests_get_4xx_with_a_detail() {
     let r = ask(&app, r#"{"state": "x", "questions": {"a": {"type": "noul"}}}"#).await;
     assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "no model: {}", r.text);
 
-    let r = ask(&app, r#"{"model": "jev-latest", "state": "x", "questions": {"a": {"type": "noul"}}}"#).await;
-    assert_eq!(r.status, StatusCode::NOT_FOUND);
-    assert!(r.json()["detail"].as_str().unwrap().contains(NAME));
-
     let r = ask(&app, &q("{}")).await;
     assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(r.json()["detail"][0]["loc"], json!(["body", "questions"]));
@@ -228,6 +224,19 @@ async fn invalid_requests_get_4xx_with_a_detail() {
 
     assert_eq!(call(&app, "GET", "/v1/nothing", None, None).await.status, StatusCode::NOT_FOUND);
     assert_eq!(call(&app, "GET", "/v1/systemone", None, None).await.status, StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
+async fn any_model_name_is_answered_and_echoed() {
+    let Some(app) = app("any_model_name_is_answered_and_echoed") else { return };
+    for name in ["jev-latest", "", NAME] {
+        let body = format!(r#"{{"model": "{name}", "state": "x", "questions": {{"a": {{"type": "noul"}}}}}}"#);
+        let r = ask(&app, &body).await;
+        assert_eq!(r.status, StatusCode::OK, "{name:?}: {}", r.text);
+        assert_eq!(r.json()["model"], name, "the requested name comes back");
+    }
+    // /v1/models still lists the model by its own name.
+    assert_eq!(call(&app, "GET", "/v1/models", None, None).await.json()["models"][0]["name"], NAME);
 }
 
 #[tokio::test]

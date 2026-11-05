@@ -80,8 +80,9 @@ curl http://localhost:8080/v1/systemone -H "Content-Type: application/json" -d '
 }
 ```
 
-- `model` must be the name `GET /v1/models` lists (the manifest's `name`, or `TYPESTRICT_MODEL_NAME`); another name
-  gets `404`.
+- The container holds one model, so any `model` value is answered, and the response echoes the requested `model` back,
+  as Jev does: a client switches by changing only its base URL. `GET /v1/models` lists the model by its own name (the
+  manifest's `name`, or `TYPESTRICT_MODEL_NAME`).
 - Answers come in the order of the questions, and a choice's probabilities in the order of its criteria.
 - `noul` is the probability of yes. `choice` returns the most likely name, its confidence and every probability.
   `score` is the expected level (the probability-weighted average of the levels, so it can fall between them).
@@ -97,14 +98,16 @@ curl http://localhost:8080/v1/systemone -H "Content-Type: application/json" -d '
 | `TYPESTRICT_TOKEN` | | none | When set, every request but `/healthz` needs `Authorization: Bearer <token>` (compared in constant time). Prefer your platform's own auth (Cloud Run IAM, Lambda IAM) when you have it. |
 | `TYPESTRICT_MODEL_DIR` | `--model` | `/model` | The model directory. |
 | `TYPESTRICT_MODEL_NAME` | `--name` | the manifest's `name` | The model name the API answers to. |
-| `TYPESTRICT_WORKERS` | `--workers` | CPU count, at most 4 (1 on Lambda) | ONNX Runtime sessions; each answers one request at a time. |
+| `TYPESTRICT_WORKERS` | `--workers` | min(CPU count, 4, memory limit / 2.5 GB), at least 1 (1 on Lambda) | ONNX Runtime sessions; each answers one request at a time. |
 | `TYPESTRICT_THREADS` | `--threads` | 1 (the CPU count on Lambda) | Threads per session. |
 | `HOST` | `--host` | `0.0.0.0` | The address to listen on. |
 
 Several 1-thread sessions answer more requests per CPU than one session with many threads; more threads per session
-cut the latency of a single request. Each session holds its own working memory, which grows with the longest request
-it has read (about 1.5 to 2 GB at 4,096 tokens for a 150M-parameter model), so size memory for
-`TYPESTRICT_WORKERS` sessions.
+cut the latency of a single request. Memory is per session: about 400 MB idle, growing up to about 2.3 GB once it has
+read a 4,096-token input (a 150M-parameter model), and ONNX Runtime keeps that memory. So without `TYPESTRICT_WORKERS`
+the runtime reads the container's memory limit (cgroup v2 `memory.max`, or v1 `memory.limit_in_bytes`) and starts at
+most one session per 2.5 GB of it: a 2 GB Cloud Run or Kubernetes container gets one session. The startup log says how
+many sessions it chose and why. Set `TYPESTRICT_WORKERS` explicitly if your inputs are short.
 
 ## AWS Lambda
 

@@ -134,12 +134,9 @@ async fn systemone(State(app): State<Arc<App>>, body: Bytes) -> Response {
             return invalid(vec![ValidationError::new(vec![json!("body")], e.to_string(), kind)]);
         }
     };
-    if req.model != app.meta.name {
-        return detail(
-            StatusCode::NOT_FOUND,
-            format!("unknown model {:?}: this server has {:?} (GET /v1/models)", req.model, app.meta.name),
-        );
-    }
+    // The container holds one model and answers whatever name the client sends, echoing it back as Jev does: a
+    // client switches from Jev by changing only its base URL.
+    let req_model = req.model.clone();
     if req.questions.0.is_empty() {
         return invalid(vec![ValidationError::new(
             vec![json!("body"), json!("questions")],
@@ -190,7 +187,7 @@ async fn systemone(State(app): State<Arc<App>>, body: Bytes) -> Response {
     let tokens = decisions.iter().map(|d| d.tokens as u64).sum();
     let answers = prepared.iter().zip(&decisions).map(|(p, d)| (p.name.clone(), contract::to_answer(p, d))).collect();
     let mut r = Json(contract::Response {
-        model: app.meta.name.clone(),
+        model: req_model,
         answers: Ordered(answers),
         usage: Usage { input_tokens: tokens, output_tokens: 0 },
     })

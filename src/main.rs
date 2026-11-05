@@ -24,7 +24,8 @@ Options:
   --host <addr>     address to listen on [env HOST, default 0.0.0.0]
   --port <n>        port to listen on [env PORT, default 8080]
   --workers <n>     ONNX Runtime sessions, one request each at a time
-                    [env TYPESTRICT_WORKERS, default: the CPU count, at most 4; 1 on AWS Lambda]
+                    [env TYPESTRICT_WORKERS, default: min(CPU count, 4, memory limit / 2.5 GB);
+                    1 on AWS Lambda]
   --threads <n>     threads per session [env TYPESTRICT_THREADS, default 1; the CPU count on AWS Lambda]
   --name <name>     the model name the API answers to [env TYPESTRICT_MODEL_NAME, default: the manifest's name]
   -h, --help        this help
@@ -42,6 +43,8 @@ struct Config {
     threads: usize,
     name: Option<String>,
     token: Option<String>,
+    /// Why `workers` has its value, for the startup log.
+    workers_why: String,
 }
 
 fn env(k: &str) -> Option<String> {
@@ -58,11 +61,17 @@ impl Config {
         // Lambda sends an execution environment one request at a time: one session with every vCPU serves it best,
         // and a second session would only add its memory (up to ~2 GB each at 4,096 tokens).
         let lambda = env("AWS_LAMBDA_FUNCTION_NAME").is_some();
-        let (workers, threads) = if lambda { (1, cpus) } else { (cpus.min(4), 1) };
+        let (workers, threads, why) = if lambda {
+            (1, cpus, "AWS Lambda: one request at a time per environment".to_string())
+        } else {
+            let limit = memory_limit();
+            (default_workers(cpus, limit), 1, workers_reason(cpus, limit))
+        };
         let mut c = Config {
             model: env("TYPESTRICT_MODEL_DIR").unwrap_or_else(|| "/model".into()).into(),
             host: env("HOST").unwrap_or_else(|| "0.0.0.0".into()),
             port: env("PORT").map(|p| parse("PORT", &p)).transpose()?.unwrap_or(8080),
+            workers_why: if env("TYPESTRICT_WORKERS").is_some() { "TYPESTRICT_WORKERS".into() } else { why },
             workers: env("TYPESTRICT_WORKERS").map(|w| parse("TYPESTRICT_WORKERS", &w)).transpose()?.unwrap_or(workers),
             threads: env("TYPESTRICT_THREADS").map(|t| parse("TYPESTRICT_THREADS", &t)).transpose()?.unwrap_or(threads),
             name: env("TYPESTRICT_MODEL_NAME"),
@@ -75,7 +84,10 @@ impl Config {
                 "--model" => c.model = value()?.into(),
                 "--host" => c.host = value()?,
                 "--port" => c.port = parse("--port", &value()?)?,
-                "--workers" => c.workers = parse("--workers", &value()?)?,
+                "--workers" => {
+                    c.workers = parse("--workers", &value()?)?;
+                    c.workers_why = "--workers".into();
+                }
                 "--threads" => c.threads = parse("--threads", &value()?)?,
                 "--name" => c.name = Some(value()?),
                 "-h" | "--help" => {
@@ -93,6 +105,37 @@ impl Config {
         c.threads = c.threads.max(1);
         Ok(Some(c))
     }
+}
+
+/// Memory one session may need: about 400 MB idle, up to ~2.3 GB after a 4,096-token request, plus headroom.
+const BYTES_PER_WORKER: u64 = 2_500_000_000;
+
+/// Limits at or above this are "no limit" (cgroup v1 reports ~2^63 when unlimited).
+const NO_LIMIT: u64 = 1 << 50;
+
+/// The default number of sessions: min(CPU count, 4, memory limit / 2.5 GB), at least 1.
+fn default_workers(cpus: usize, memory_limit: Option<u64>) -> usize {
+    let by_memory = memory_limit.map_or(usize::MAX, |l| (l / BYTES_PER_WORKER) as usize);
+    cpus.min(4).min(by_memory).max(1)
+}
+
+fn workers_reason(cpus: usize, memory_limit: Option<u64>) -> String {
+    match memory_limit {
+        Some(l) => format!("min({cpus} CPUs, 4, {:.1} GB memory limit / 2.5 GB per session)", l as f64 / 1e9),
+        None => format!("min({cpus} CPUs, 4), no memory limit found"),
+    }
+}
+
+/// A cgroup memory limit file's value: bytes, or `None` for "max" or an absurdly large number.
+fn parse_memory_limit(text: &str) -> Option<u64> {
+    text.trim().parse::<u64>().ok().filter(|&b| b > 0 && b < NO_LIMIT)
+}
+
+/// The container's memory limit, from cgroup v2 or v1.
+fn memory_limit() -> Option<u64> {
+    ["/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"]
+        .iter()
+        .find_map(|p| std::fs::read_to_string(p).ok().and_then(|t| parse_memory_limit(&t)))
 }
 
 /// The model directory as a per-model image lays it out, or a message that says what is missing.
@@ -165,11 +208,12 @@ async fn run(c: Config) -> Result<()> {
         format!("{}:{}", c.host, c.port).parse().with_context(|| format!("address {}:{}", c.host, c.port))?;
     let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("listening on {addr}"))?;
     eprintln!(
-        "typestrict-serve {} on http://{addr}: model {:?} from {} ({} worker(s) x {} thread(s), token {})",
+        "typestrict-serve {} on http://{addr}: model {:?} from {} ({} worker(s) [{}] x {} thread(s), token {})",
         env!("CARGO_PKG_VERSION"),
         app.meta.name,
         c.model.display(),
         c.workers,
+        c.workers_why,
         c.threads,
         if c.token.is_some() { "required" } else { "not required" }
     );
@@ -230,6 +274,22 @@ mod tests {
         assert_eq!(date(UNIX_EPOCH), "1970-01-01");
         assert_eq!(date(UNIX_EPOCH + Duration::from_secs(951_782_400)), "2000-02-29");
         assert_eq!(date(UNIX_EPOCH + Duration::from_secs(1_793_836_800)), "2026-11-05");
+    }
+
+    #[test]
+    fn default_workers_fit_cpus_and_memory() {
+        const GB: u64 = 1_000_000_000;
+        assert_eq!(default_workers(10, None), 4);
+        assert_eq!(default_workers(2, None), 2);
+        assert_eq!(default_workers(8, Some(2 * GB)), 1, "a 2 GB container gets one session");
+        assert_eq!(default_workers(8, Some(5 * GB)), 2);
+        assert_eq!(default_workers(8, Some(64 * GB)), 4);
+        assert_eq!(default_workers(1, Some(64 * GB)), 1);
+        assert_eq!(default_workers(0, Some(GB / 2)), 1, "never fewer than one");
+        assert_eq!(parse_memory_limit("max\n"), None);
+        assert_eq!(parse_memory_limit("9223372036854771712\n"), None, "cgroup v1 unlimited");
+        assert_eq!(parse_memory_limit("2147483648\n"), Some(2_147_483_648));
+        assert_eq!(parse_memory_limit("garbage"), None);
     }
 
     #[test]
