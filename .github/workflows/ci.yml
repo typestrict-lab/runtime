@@ -1,0 +1,59 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    # 24.04: pyke's static ONNX Runtime needs glibc 2.38+ and GCC 14's libstdc++ symbols.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      # The golden and HTTP tests run the real model (TS-PRGuard, 170 MB, pinned revision and hashes).
+      - name: Cache the test model
+        uses: actions/cache@v4
+        with:
+          path: test-model
+          key: test-model-${{ hashFiles('scripts/fetch-test-model.sh') }}
+      - run: scripts/fetch-test-model.sh
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --release --locked
+
+  # The image as published, built and asked one question of each type with the test model mounted.
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: typestrict-serve:ci
+          cache-from: type=gha,scope=ci
+          cache-to: type=gha,mode=max,scope=ci
+      - name: Cache the test model
+        uses: actions/cache@v4
+        with:
+          path: test-model
+          key: test-model-${{ hashFiles('scripts/fetch-test-model.sh') }}
+      - run: scripts/fetch-test-model.sh
+      - run: scripts/smoke.sh typestrict-serve:ci test-model
+      - name: Without a model the image says so and exits
+        run: |
+          set -u
+          if out="$(docker run --rm typestrict-serve:ci 2>&1)"; then echo "::error::started without a model"; exit 1; fi
+          echo "$out"
+          echo "$out" | grep -q "no model in /model"
