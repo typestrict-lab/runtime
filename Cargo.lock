@@ -1303,7 +1303,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "typestrict-serve"
+name = "typestrict-runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",

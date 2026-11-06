@@ -11,9 +11,9 @@ use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
-use typestrict_serve::contract::ModelMetadata;
-use typestrict_serve::reader::{Encoder, Model};
-use typestrict_serve::server::{App, LATENCY_HEADER, router};
+use typestrict_runtime::contract::ModelMetadata;
+use typestrict_runtime::reader::{Encoder, Model};
+use typestrict_runtime::server::{App, LATENCY_HEADER, router};
 
 const NAME: &str = "pr-guard-test";
 
@@ -364,7 +364,7 @@ async fn a_token_guards_everything_but_healthz() {
 
 #[test]
 fn tokens_compare_in_constant_time_and_correctly() {
-    use typestrict_serve::server::constant_time_eq;
+    use typestrict_runtime::server::constant_time_eq;
     assert!(constant_time_eq(b"abc", b"abc"));
     assert!(!constant_time_eq(b"abc", b"abd"));
     assert!(!constant_time_eq(b"abc", b"ab"));

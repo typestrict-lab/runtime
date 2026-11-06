@@ -1,11 +1,11 @@
-# typestrict-serve
+# typestrict-runtime
 
 The HTTP runtime that serves a [typestrict.ai](https://typestrict.ai) model on CPU with the same decision API as Jev:
 `POST /v1/systemone`. Switching from Jev to your own model is changing a base URL.
 
 - One static binary (Rust, ONNX Runtime linked in), no GPU, no database.
 - No network calls and no telemetry: requests and data stay in your infrastructure.
-- Published as the image `ghcr.io/typestrict-lab/serve` (linux/amd64, linux/arm64). The image carries no model: a
+- Published as the image `ghcr.io/typestrict-lab/runtime` (linux/amd64, linux/arm64). The image carries no model: a
   model's image is this one plus one layer with the model files at `/model`.
 - Runs unchanged on Docker, Kubernetes, Cloud Run and AWS Lambda (the
   [AWS Lambda Web Adapter](https://github.com/awslabs/aws-lambda-web-adapter) is in the image).
@@ -24,13 +24,13 @@ model/
 With Docker, mount it at `/model`:
 
 ```bash
-docker run -p 8080:8080 -v "$PWD/model:/model:ro" ghcr.io/typestrict-lab/serve
+docker run -p 8080:8080 -v "$PWD/model:/model:ro" ghcr.io/typestrict-lab/runtime
 ```
 
 or bake it into an image of its own:
 
 ```dockerfile
-FROM ghcr.io/typestrict-lab/serve:0.1
+FROM ghcr.io/typestrict-lab/runtime:0.1
 COPY model/ /model/
 ```
 
@@ -38,7 +38,7 @@ From source (Rust 1.88 or newer):
 
 ```bash
 cargo build --release
-./target/release/typestrict-serve --model ./model
+./target/release/typestrict-runtime --model ./model
 ```
 
 `GET /healthz` answers `503 loading` while the model loads, then `200 ok`. Without a model in the directory the
@@ -174,7 +174,7 @@ token ids, option positions and padding, and probabilities within 1e-4 (in pract
 scripts/fetch-test-model.sh     # typestrict/TS-PRGuard at a pinned revision, each file checked by SHA-256 (170 MB)
 cargo test                      # unit, golden and HTTP tests; the last two are skipped, with a message, without the model
 cargo clippy --all-targets -- -D warnings
-docker build -t typestrict-serve . && scripts/smoke.sh typestrict-serve test-model
+docker build -t typestrict-runtime . && scripts/smoke.sh typestrict-runtime test-model
 ```
 
 ### Golden vectors

@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::Value;
-use typestrict_serve::manifest::Kind;
-use typestrict_serve::reader::{Encoder, Model, Question};
+use typestrict_runtime::manifest::Kind;
+use typestrict_runtime::reader::{Encoder, Model, Question};
 
 const TOLERANCE: f64 = 1e-4;
 
@@ -24,7 +24,7 @@ fn golden() -> Value {
 /// A model directory with the case's manifest patch (top-level keys replaced, as the generator does), the other
 /// files linked to the test model's.
 fn patched(model: &Path, case: &str, patch: &Value) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("typestrict-serve-golden-{}-{case}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("typestrict-runtime-golden-{}-{case}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut m: Value = serde_json::from_str(&std::fs::read_to_string(model.join("decision_ai.json")).unwrap()).unwrap();

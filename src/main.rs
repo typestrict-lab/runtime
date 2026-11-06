@@ -1,4 +1,4 @@
-//! `typestrict-serve [--model <dir>] [--host <addr>] [--port <n>] [--workers <n>] [--threads <n>]`
+//! `typestrict-runtime [--model <dir>] [--host <addr>] [--port <n>] [--workers <n>] [--threads <n>]`
 //!
 //! Serves the typestrict.ai model in `<dir>` (default `/model`) over HTTP. See README.md.
 
@@ -9,14 +9,14 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use typestrict_serve::contract::ModelMetadata;
-use typestrict_serve::reader::{Encoder, Model};
-use typestrict_serve::server::{self, App};
+use typestrict_runtime::contract::ModelMetadata;
+use typestrict_runtime::reader::{Encoder, Model};
+use typestrict_runtime::server::{self, App};
 
 const USAGE: &str = "\
-typestrict-serve: a typestrict.ai model on CPU, with Jev's decision API (POST /v1/systemone)
+typestrict-runtime: a typestrict.ai model on CPU, with Jev's decision API (POST /v1/systemone)
 
-Usage: typestrict-serve [options]
+Usage: typestrict-runtime [options]
 
 Options:
   --model <dir>     model directory with decision_ai.json, tokenizer.json and the ONNX it names
@@ -95,7 +95,7 @@ impl Config {
                     return Ok(None);
                 }
                 "-V" | "--version" => {
-                    println!("typestrict-serve {}", env!("CARGO_PKG_VERSION"));
+                    println!("typestrict-runtime {}", env!("CARGO_PKG_VERSION"));
                     return Ok(None);
                 }
                 other => bail!("unknown argument {other:?} (see --help)"),
@@ -143,7 +143,7 @@ fn check_model_dir(dir: &Path) -> Result<()> {
     if !dir.join("decision_ai.json").is_file() {
         bail!(
             "no model in {}: expected decision_ai.json, tokenizer.json and the ONNX the manifest names \
-             (onnx/model_8bit.onnx). The typestrict-serve image carries no model: build an image FROM it that copies \
+             (onnx/model_8bit.onnx). The typestrict-runtime image carries no model: build an image FROM it that copies \
              the model files to /model, mount them there (docker run -v <model dir>:/model:ro ...), or pass --model <dir>",
             dir.display()
         );
@@ -208,7 +208,7 @@ async fn run(c: Config) -> Result<()> {
         format!("{}:{}", c.host, c.port).parse().with_context(|| format!("address {}:{}", c.host, c.port))?;
     let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("listening on {addr}"))?;
     eprintln!(
-        "typestrict-serve {} on http://{addr}: model {:?} from {} ({} worker(s) [{}] x {} thread(s), token {})",
+        "typestrict-runtime {} on http://{addr}: model {:?} from {} ({} worker(s) [{}] x {} thread(s), token {})",
         env!("CARGO_PKG_VERSION"),
         app.meta.name,
         c.model.display(),
@@ -234,7 +234,7 @@ async fn run(c: Config) -> Result<()> {
                     );
                 }
                 Err(e) => {
-                    eprintln!("typestrict-serve: {e:#}");
+                    eprintln!("typestrict-runtime: {e:#}");
                     std::process::exit(1);
                 }
             }
@@ -250,7 +250,7 @@ fn main() -> ExitCode {
         Ok(Some(c)) => c,
         Ok(None) => return ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("typestrict-serve: {e:#}");
+            eprintln!("typestrict-runtime: {e:#}");
             return ExitCode::from(2);
         }
     };
@@ -258,7 +258,7 @@ fn main() -> ExitCode {
     match rt.block_on(run(c)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("typestrict-serve: {e:#}");
+            eprintln!("typestrict-runtime: {e:#}");
             ExitCode::FAILURE
         }
     }

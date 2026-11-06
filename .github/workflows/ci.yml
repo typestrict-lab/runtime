@@ -41,7 +41,7 @@ jobs:
         with:
           context: .
           load: true
-          tags: typestrict-serve:ci
+          tags: typestrict-runtime:ci
           cache-from: type=gha,scope=ci
           cache-to: type=gha,mode=max,scope=ci
       - name: Cache the test model
@@ -50,10 +50,10 @@ jobs:
           path: test-model
           key: test-model-${{ hashFiles('scripts/fetch-test-model.sh') }}
       - run: scripts/fetch-test-model.sh
-      - run: scripts/smoke.sh typestrict-serve:ci test-model
+      - run: scripts/smoke.sh typestrict-runtime:ci test-model
       - name: Without a model the image says so and exits
         run: |
           set -u
-          if out="$(docker run --rm typestrict-serve:ci 2>&1)"; then echo "::error::started without a model"; exit 1; fi
+          if out="$(docker run --rm typestrict-runtime:ci 2>&1)"; then echo "::error::started without a model"; exit 1; fi
           echo "$out"
           echo "$out" | grep -q "no model in /model"

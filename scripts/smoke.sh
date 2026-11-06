@@ -5,7 +5,7 @@
 set -eu
 image="${1:?usage: smoke.sh <image> <model dir>}"
 model="$(cd "${2:?usage: smoke.sh <image> <model dir>}" && pwd)"
-name="typestrict-serve-smoke-$$"
+name="typestrict-runtime-smoke-$$"
 port="${SMOKE_PORT:-18080}"
 
 docker run -d --rm --name "$name" -p "$port:8080" -e TYPESTRICT_TOKEN=smoke -v "$model:/model:ro" "$image" >/dev/null

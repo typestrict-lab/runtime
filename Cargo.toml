@@ -1,11 +1,11 @@
 [package]
-name = "typestrict-serve"
+name = "typestrict-runtime"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "Apache-2.0"
 description = "Serves a typestrict.ai model on CPU over HTTP, with Jev's decision API (POST /v1/systemone)."
-repository = "https://github.com/typestrict-lab/serve"
+repository = "https://github.com/typestrict-lab/runtime"
 readme = "README.md"
 
 [dependencies]

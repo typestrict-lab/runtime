@@ -13,8 +13,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
 use serde_json::json;
-use typestrict_serve::manifest::Kind;
-use typestrict_serve::reader::{Decision, Encoded, Encoder, Model, Question};
+use typestrict_runtime::manifest::Kind;
+use typestrict_runtime::reader::{Decision, Encoded, Encoder, Model, Question};
 
 const WORKERS: usize = 4;
 
