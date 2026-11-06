@@ -5,9 +5,11 @@
 //! - [`reader`]: the option reader (the Dinah protocol), a port of the typestrict.ai playground's `reader.ts`.
 //! - [`contract`]: Jev's request and answer shapes.
 //! - [`server`]: the HTTP routes.
+//! - [`page`]: `GET /`, the page a browser sees.
 
 pub mod contract;
 pub mod manifest;
+pub mod page;
 pub mod reader;
 pub mod render;
 pub mod server;

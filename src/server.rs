@@ -1,4 +1,4 @@
-//! The HTTP surface: `POST /v1/systemone`, `GET /v1/models`, `GET /healthz`.
+//! The HTTP surface: `POST /v1/systemone`, `GET /v1/models`, `GET /healthz`, and `GET /`, a page for a browser.
 //!
 //! - **A pool of 1-thread sessions**, not one N-thread session: on CPU a 1-thread session costs only ~1.5x the time of a
 //!   4-thread one, so N 1-thread workers answer ~2.5x more questions per CPU (measured in the typestrict lab). Each
@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Request as HttpRequest, State};
-use axum::http::header::{AUTHORIZATION, WWW_AUTHENTICATE};
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, WWW_AUTHENTICATE};
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -76,6 +76,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route_layer(middleware::from_fn_with_state(app.clone(), auth));
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/", get(page))
         .merge(api)
         .fallback(|| async { detail(StatusCode::NOT_FOUND, "Not Found") })
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
@@ -121,6 +122,11 @@ async fn healthz(State(app): State<Arc<App>>) -> Response {
     } else {
         (StatusCode::SERVICE_UNAVAILABLE, "loading").into_response()
     }
+}
+
+async fn page(State(app): State<Arc<App>>) -> Response {
+    let html = crate::page::render(&app.meta, &app.enc.manifest, app.is_ready(), app.token.is_some());
+    ([(CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"))], html).into_response()
 }
 
 async fn models(State(app): State<Arc<App>>) -> Json<Value> {

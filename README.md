@@ -1,7 +1,29 @@
-# typestrict-runtime
+<p align="center">
+  <img src=".github/banner.png" alt="typestrict-runtime, by typestrict.ai" width="100%">
+</p>
+
+<h1 align="center">typestrict-runtime</h1>
+
+<p align="center">
+  <b>Your typestrict.ai model on a CPU, behind Jev's decision API.</b><br>
+  Switching from Jev to your own model is changing a base URL.
+</p>
+
+<p align="center">
+  <a href="https://docs.typestrict.ai/en/deploy"><img alt="Docs" src="https://img.shields.io/badge/docs-typestrict.ai-FFD400?style=flat-square&labelColor=1A1806"></a>
+  <a href="https://github.com/typestrict-lab/runtime/pkgs/container/runtime"><img alt="Image" src="https://img.shields.io/badge/image-ghcr.io%2Ftypestrict--lab%2Fruntime-FFD400?style=flat-square&labelColor=1A1806"></a>
+  <img alt="Jev compatible" src="https://img.shields.io/badge/Jev%20compatible-POST%20%2Fv1%2Fsystemone-FFD400?style=flat-square&labelColor=1A1806">
+  <img alt="Platforms" src="https://img.shields.io/badge/platforms-amd64%20%C2%B7%20arm64-FFE766?style=flat-square&labelColor=1A1806">
+  <img alt="Runs on the CPU" src="https://img.shields.io/badge/runs%20on-CPU-FFE766?style=flat-square&labelColor=1A1806">
+  <img alt="No telemetry" src="https://img.shields.io/badge/telemetry-none-FFE766?style=flat-square&labelColor=1A1806">
+  <a href="LICENSE"><img alt="Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-FFF8D6?style=flat-square&labelColor=1A1806"></a>
+  <a href="https://typestrict.ai"><img alt="Powered by typestrict.ai" src="https://img.shields.io/badge/powered%20by-typestrict.ai-FFD400?style=flat-square&labelColor=1A1806"></a>
+</p>
+
+---
 
 The HTTP runtime that serves a [typestrict.ai](https://typestrict.ai) model on CPU with the same decision API as Jev:
-`POST /v1/systemone`. Switching from Jev to your own model is changing a base URL.
+`POST /v1/systemone`.
 
 - One static binary (Rust, ONNX Runtime linked in), no GPU, no database.
 - No network calls and no telemetry: requests and data stay in your infrastructure.
@@ -51,6 +73,7 @@ process exits at once with a message that says what is missing.
 | `POST /v1/systemone` | Answers named questions about a `state`, in Jev's request and response format. |
 | `GET /v1/models` | The model inside, by name: `{"models": [{"name", "description", "release_date"}]}`. |
 | `GET /healthz` | `ok` once the model is loaded, for health and readiness checks. Never needs the token. |
+| `GET /` | A page for the browser: the model inside, the questions it was trained on and a `curl` to ask it. Loads nothing from outside; with `TYPESTRICT_TOKEN` set it does not list the questions. |
 
 ```bash
 curl http://localhost:8080/v1/systemone -H "Content-Type: application/json" -d '{
